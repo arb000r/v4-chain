@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	indexersharedtypes "github.com/dydxprotocol/v4-chain/protocol/indexer/shared/types"
 	"github.com/dydxprotocol/v4-chain/protocol/mocks"
 	"github.com/dydxprotocol/v4-chain/protocol/testutil/constants"
 	testutil_memclob "github.com/dydxprotocol/v4-chain/protocol/testutil/memclob"
@@ -21,7 +22,7 @@ func TestRemoveOrder_PanicsIfNotExists(t *testing.T) {
 	order1 := constants.Order_Alice_Num0_Id0_Clob0_Buy5_Price10_GTB15
 
 	require.Panics(t, func() {
-		memclob.mustRemoveOrder(ctx, order1.OrderId)
+		memclob.mustRemoveOrder(ctx, order1.OrderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_UNSPECIFIED)
 	})
 }
 
@@ -626,7 +627,7 @@ func TestRemoveOrder(t *testing.T) {
 			}
 
 			// Run the test case.
-			memclob.mustRemoveOrder(ctx, tc.order.OrderId)
+			memclob.mustRemoveOrder(ctx, tc.order.OrderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_UNSPECIFIED)
 			requireOrderDoesNotExistInMemclob(t, ctx, tc.order, memclob)
 			for _, existingOrder := range tc.existingOrders {
 				if existingOrder != tc.order {

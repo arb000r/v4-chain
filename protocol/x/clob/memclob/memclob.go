@@ -127,7 +127,7 @@ func (m *MemClobPriceTimePriority) CancelOrder(
 	// TODO(DEC-824): Perform correct cancellation validation of stateful orders.
 	if levelOrder, orderExists := orderbook.orderIdToLevelOrder[orderIdToCancel]; orderExists &&
 		goodTilBlock >= levelOrder.Value.Order.GetGoodTilBlock() {
-		m.mustRemoveOrder(ctx, orderIdToCancel)
+		m.mustRemoveOrder(ctx, orderIdToCancel, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_USER_CANCELED)
 
 		telemetry.IncrCounter(1, types.ModuleName, metrics.CancelShortTermOrder, metrics.RemovedFromOrderBook)
 	}
@@ -782,13 +782,14 @@ func (m *MemClobPriceTimePriority) matchOrder(
 		makerOrderId := makerOrderWithRemovalReason.Order.OrderId
 		// TODO(CLOB-669): Move logic outside of `memclob.go` by returning a slice of removed orders.
 		// If the order is a replacement order, a message was already added above the place message.
+
+		// If the taker order and the removed maker order are from the same subaccount, set
+		// the reason to SELF_TRADE error, otherwise set the reason to be UNDERCOLLATERALIZED.
+		// TODO(DEC-1409): Update this to support order replacements on indexer.
+		reason := indexershared.ConvertOrderRemovalReasonToIndexerOrderRemovalReason(
+			makerOrderWithRemovalReason.RemovalReason,
+		)
 		if m.generateOffchainUpdates && (order.IsLiquidation() || makerOrderId != order.MustGetOrder().OrderId) {
-			// If the taker order and the removed maker order are from the same subaccount, set
-			// the reason to SELF_TRADE error, otherwise set the reason to be UNDERCOLLATERALIZED.
-			// TODO(DEC-1409): Update this to support order replacements on indexer.
-			reason := indexershared.ConvertOrderRemovalReasonToIndexerOrderRemovalReason(
-				makerOrderWithRemovalReason.RemovalReason,
-			)
 			if message, success := off_chain_updates.CreateOrderRemoveMessageWithReason(
 				branchedContext,
 				makerOrderId,
@@ -799,7 +800,7 @@ func (m *MemClobPriceTimePriority) matchOrder(
 			}
 		}
 
-		m.mustRemoveOrder(branchedContext, makerOrderId)
+		m.mustRemoveOrder(branchedContext, makerOrderId, reason)
 		if makerOrderId.IsStatefulOrder() && !m.operationsToPropose.IsOrderRemovalInOperationsQueue(makerOrderId) {
 			m.operationsToPropose.MustAddOrderRemovalToOperationsQueue(
 				makerOrderId,
@@ -1169,7 +1170,7 @@ func (m *MemClobPriceTimePriority) RemoveAndClearOperationsQueue(
 			orderbook := m.mustGetOrderbook(types.ClobPairId(otpOrderId.GetClobPairId()))
 			existingOrder, found := orderbook.getOrder(otpOrderId)
 			if found && existingOrder.GetOrderHash() == otpOrderHash {
-				m.mustRemoveOrder(ctx, otpOrderId)
+				m.mustRemoveOrder(ctx, otpOrderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_UNSPECIFIED)
 			} else {
 				order := operation.GetShortTermOrderPlacement().Order
 				m.operationsToPropose.RemoveShortTermOrderTxBytes(order)
@@ -1185,7 +1186,7 @@ func (m *MemClobPriceTimePriority) RemoveAndClearOperationsQueue(
 			// OTP, and therefore be removed in this loop as well.
 			orderbook := m.mustGetOrderbook(types.ClobPairId(otpOrderId.GetClobPairId()))
 			if orderbook.hasOrder(*otpOrderId) {
-				m.mustRemoveOrder(ctx, *otpOrderId)
+				m.mustRemoveOrder(ctx, *otpOrderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_UNSPECIFIED)
 			}
 		}
 	}
@@ -1231,7 +1232,7 @@ func (m *MemClobPriceTimePriority) PurgeInvalidMemclobState(
 		// check failures, self-trade errors, etc and will not be removed from state. Therefore it
 		// is possible that when they are canceled they will not exist on the orderbook.
 		if orderbook.hasOrder(statefulOrderId) {
-			m.mustRemoveOrder(ctx, statefulOrderId)
+			m.mustRemoveOrder(ctx, statefulOrderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_UNSPECIFIED)
 		}
 	}
 
@@ -1246,7 +1247,7 @@ func (m *MemClobPriceTimePriority) PurgeInvalidMemclobState(
 		// check failures, self-trade errors, etc and will not be removed from state. Therefore it
 		// is possible that when they expire they will not exist on the orderbook.
 		if orderbook.hasOrder(statefulOrderId) {
-			m.mustRemoveOrder(ctx, statefulOrderId)
+			m.mustRemoveOrder(ctx, statefulOrderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_EXPIRED)
 
 			if m.generateOffchainUpdates {
 				// Send an off-chain update message indicating the stateful order should be removed from the
@@ -1282,7 +1283,7 @@ func (m *MemClobPriceTimePriority) PurgeInvalidMemclobState(
 					}
 				}
 
-				m.mustRemoveOrder(ctx, shortTermOrderId)
+				m.mustRemoveOrder(ctx, shortTermOrderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_EXPIRED)
 			}
 		}
 	}
@@ -1294,7 +1295,7 @@ func (m *MemClobPriceTimePriority) PurgeInvalidMemclobState(
 		orderbook := m.mustGetOrderbook(types.ClobPairId(statefulOrderId.GetClobPairId()))
 
 		if orderbook.hasOrder(statefulOrderId) {
-			m.mustRemoveOrder(ctx, statefulOrderId)
+			m.mustRemoveOrder(ctx, statefulOrderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_UNSPECIFIED)
 		}
 	}
 
@@ -1894,6 +1895,7 @@ func (m *MemClobPriceTimePriority) SetMemclobGauges(
 func (m *MemClobPriceTimePriority) mustRemoveOrder(
 	ctx sdk.Context,
 	orderId types.OrderId,
+	reason indexersharedtypes.OrderRemovalReason,
 ) {
 	defer telemetry.ModuleMeasureSince(
 		types.ModuleName,
@@ -1922,7 +1924,7 @@ func (m *MemClobPriceTimePriority) mustRemoveOrder(
 
 	if m.generateOrderbookUpdates {
 		// Send an orderbook update to grpc streams.
-		orderbookUpdate := m.GetOrderbookUpdatesForOrderRemoval(ctx, order.OrderId)
+		orderbookUpdate := m.GetOrderbookUpdatesForOrderRemoval(ctx, order.OrderId, reason)
 		m.clobKeeper.SendOrderbookUpdates(ctx, orderbookUpdate)
 	}
 }
@@ -1947,7 +1949,7 @@ func (m *MemClobPriceTimePriority) mustUpdateOrderbookStateWithMatchedMakerOrder
 	// the order was matched.
 	if newTotalFilledAmount == makerOrderBaseQuantums {
 		makerOrderId := makerOrder.OrderId
-		m.mustRemoveOrder(ctx, makerOrderId)
+		m.mustRemoveOrder(ctx, makerOrderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_FULLY_FILLED)
 	}
 
 	if m.generateOffchainUpdates {
@@ -2036,7 +2038,7 @@ func (m *MemClobPriceTimePriority) RemoveOrderIfFilled(
 	// Case: order is now completely filled and can be removed.
 	order := levelOrder.Value.Order
 	if orderStateFillAmount >= order.GetBaseQuantums() {
-		m.mustRemoveOrder(ctx, order.OrderId)
+		m.mustRemoveOrder(ctx, order.OrderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_FULLY_FILLED)
 	}
 }
 
@@ -2076,7 +2078,7 @@ func (m *MemClobPriceTimePriority) maybeCancelReduceOnlyOrders(
 			// Remove each open reduce-only order from the memclob.
 			for _, orderId := range openReduceOnlyOrdersCopy {
 				// TODO(DEC-847): Update logic to properly remove stateful orders.
-				m.mustRemoveOrder(ctx, orderId)
+				m.mustRemoveOrder(ctx, orderId, indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_REDUCE_ONLY_RESIZE)
 				if orderId.IsStatefulOrder() && !m.operationsToPropose.IsOrderRemovalInOperationsQueue(orderId) {
 					m.operationsToPropose.MustAddOrderRemovalToOperationsQueue(
 						orderId,

@@ -4,6 +4,7 @@ import (
 	"math/big"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	indexersharedtypes "github.com/dydxprotocol/v4-chain/protocol/indexer/shared/types"
 	perptypes "github.com/dydxprotocol/v4-chain/protocol/x/perpetuals/types"
 	satypes "github.com/dydxprotocol/v4-chain/protocol/x/subaccounts/types"
 )
@@ -148,6 +149,7 @@ type MemClob interface {
 	GetOrderbookUpdatesForOrderRemoval(
 		ctx sdk.Context,
 		orderId OrderId,
+		reason indexersharedtypes.OrderRemovalReason,
 	) (offchainUpdates *OffchainUpdates)
 	GetOrderbookUpdatesForOrderUpdate(
 		ctx sdk.Context,

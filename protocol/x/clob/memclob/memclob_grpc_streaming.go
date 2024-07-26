@@ -123,12 +123,13 @@ func (m *MemClobPriceTimePriority) GetOrderbookUpdatesForOrderPlacement(
 func (m *MemClobPriceTimePriority) GetOrderbookUpdatesForOrderRemoval(
 	ctx sdk.Context,
 	orderId types.OrderId,
+	reason indexersharedtypes.OrderRemovalReason,
 ) (offchainUpdates *types.OffchainUpdates) {
 	offchainUpdates = types.NewOffchainUpdates()
 	if message, success := off_chain_updates.CreateOrderRemoveMessageWithReason(
 		ctx,
 		orderId,
-		indexersharedtypes.OrderRemovalReason_ORDER_REMOVAL_REASON_UNSPECIFIED,
+		reason,
 		ocutypes.OrderRemoveV1_ORDER_REMOVAL_STATUS_BEST_EFFORT_CANCELED,
 	); success {
 		offchainUpdates.AddRemoveMessage(orderId, message)
